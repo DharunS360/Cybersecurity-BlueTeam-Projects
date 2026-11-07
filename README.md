@@ -18,3 +18,6 @@ Welcome to my Blue Team portfolio! This repository is a collection of hands-on P
 
 ## ??? General Setup
 Each project has its own README.md with specific instructions. Navigate to the respective folder to learn more.
+
+### 05 - VulnSentinel (Vulnerability & Attack Surface Dashboard)
+Port exposure, web hardening, TLS checks, threat intel (CISA KEV, Shodan InternetDB) and MITRE ATT&CK mapping, with a web dashboard. [Open project](05-Vulnerability-Scanner/)
