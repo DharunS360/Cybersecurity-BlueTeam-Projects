@@ -1,0 +1,4 @@
+{
+    "virustotal_api_key": "YOUR_VIRUSTOTAL_API_KEY_HERE",
+    "otx_api_key": "YOUR_ALIENVAULT_OTX_API_KEY_HERE"
+}
