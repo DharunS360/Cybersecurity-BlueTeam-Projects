@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+# host-specific evidence: never commit real case data or machine baselines
+cases/
+baseline.json

@@ -1,0 +1,7 @@
+{
+  "_help": "Entries are suppressed on the next triage run. Keys: names (process/item names), paths, hashes (SHA-256), titles (finding-title substrings). You can also right-click any row in the GUI -> Allowlist.",
+  "names": [],
+  "paths": [],
+  "hashes": [],
+  "titles": []
+}

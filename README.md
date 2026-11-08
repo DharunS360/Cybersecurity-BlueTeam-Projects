@@ -21,19 +21,23 @@ tool with its own documentation, not a tutorial copy.
 | 05 | [VulnSentinel](05-Vulnerability-Scanner/) | Attack surface scanner with web dashboard, threat intel (CISA KEV, Shodan InternetDB) and MITRE ATT&CK mapping | Python, Flask, Shodan InternetDB, CISA KEV | Completed |
 | 10 | [PhishScope](10-Phishing-Email-Analyzer) | Phishing e-mail triage: live SPF/DKIM/DMARC, routing, URL and attachment analysis, IOCs and MITRE mapping | Python, PyQt5, dnspython, dkimpy, VirusTotal | Completed |
 | 08 | [Network Traffic Analyzer](08-Network-Traffic-Analyzer/) | Real-time network detection console: flow tracking, process attribution, TLS SNI/JA3, GeoIP/ASN, threat intel and 16 MITRE ATT&CK-mapped detections | Python, PyQt5, Scapy, psutil, PyQtGraph | Completed |
+| 09 | [Incident Response Triage Toolkit](09-Incident-Response-Triage-Toolkit) | Live Windows IR triage console: process, network, persistence and event-log collection, MITRE ATT&CK-mapped detections, timeline, IOC extraction, process tree, baseline diff and case export | Python, PyQt5, psutil, PowerShell/CIM, VirusTotal | Completed |
 
 ## Blue Team Skills Demonstrated
 
 | Domain | Covered by |
 |--------|------------|
 | Credential security | 01 |
-| Threat intelligence and IOC enrichment | 02, 04, 05, 08, 10 |
+| Threat intelligence and IOC enrichment | 02, 04, 05, 08, 10, 09 |
 | Log analysis and detection of brute-force activity | 03 |
 | Phishing and malicious URL analysis | 04, 10 |
 | E-mail security (SPF, DKIM, DMARC) and attachment triage | 10 |
 | Vulnerability and exposure management | 05 |
-| Threat-informed defense (MITRE ATT&CK) | 05, 08 |
+| Threat-informed defense (MITRE ATT&CK) | 05, 08, 09 |
 | Network traffic analysis and detection (C2 beaconing, DNS tunneling, scans, ARP spoofing) | 08 |
+| Incident response, live triage and forensic artifact collection | 09 |
+| Persistence and malware hunting (registry, services, tasks, WMI) | 09 |
+| Detection engineering (rule logic, allowlisting, baselining, unit tests) | 09 |
 | Secure coding (input validation, output escaping, no hardcoded secrets) | All |
 
 ## Roadmap
@@ -44,7 +48,6 @@ Planned projects that extend the portfolio across the full SOC workflow.
 |---|---------|-------|--------|
 | 06 | Detection Engineering Lab | Sigma-style rule engine, rule testing, ATT&CK coverage map | Planned |
 | 07 | Windows Event and Sysmon Threat Hunter | EVTX parsing, hunting for persistence, credential access, lateral movement | Planned |
-| 09 | Incident Response Triage Toolkit | Volatile artifact collection, timeline building, IOC extraction | Planned |
 | 11 | Mini SIEM | Log ingestion, correlation rules, alerting and dashboard | Planned |
 | 12 | SOAR Playbook Automation | Automated enrichment and response workflows for common alerts | Planned |
 | 13 | Windows Hardening Auditor | CIS-style configuration audit with remediation guidance | Planned |
@@ -61,6 +64,7 @@ Cybersecurity-BlueTeam-Projects/
   05-Vulnerability-Scanner/
   10-Phishing-Email-Analyzer/
   08-Network-Traffic-Analyzer/
+  09-Incident-Response-Triage-Toolkit/
   LICENSE
   README.md
 ```
@@ -78,7 +82,7 @@ pip install -r requirements.txt
 ```
 
 API keys (VirusTotal, AbuseIPDB and others) are read from environment variables. No secrets are stored in this
-repository. Project 08 additionally requires [Npcap](https://npcap.com) and an Administrator terminal for live capture.
+repository. Project 08 additionally requires [Npcap](https://npcap.com) and an Administrator terminal for live capture. Project 09 also benefits from an Administrator terminal (Security event log, Prefetch and Defender state).
 
 ## Responsible Use
 
@@ -90,7 +94,7 @@ are explicitly authorized to assess.
 **Dharun S**: aspiring Blue Team / SOC Analyst
 
 - GitHub: [DharunS360](https://github.com/DharunS360)
-- LinkedIn: add your profile link here
+- LinkedIn: https://www.linkedin.com/in/YOUR-PROFILE
 
 ## License
 

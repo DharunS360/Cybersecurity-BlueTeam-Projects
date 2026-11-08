@@ -11,12 +11,13 @@ import sys
 import time
 import traceback
 
-from PyQt5.QtCore import (QAbstractTableModel, QModelIndex, QRectF, QSortFilterProxyModel, Qt, QThread, pyqtSignal)
+from PyQt5.QtCore import (QAbstractTableModel, QModelIndex, QRectF, QSortFilterProxyModel, Qt, QThread, QTimer, pyqtSignal)
 from PyQt5.QtGui import QBrush, QColor, QFont, QLinearGradient, QPainter, QPen
 from PyQt5.QtWidgets import (QApplication, QCheckBox, QComboBox, QFileDialog, QFrame, QGraphicsDropShadowEffect,
                              QGridLayout, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem,
                              QMainWindow, QMenu, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QSpinBox,
-                             QSplitter, QTableView, QTabWidget, QVBoxLayout, QWidget)
+                             QSplitter, QTableView, QTabWidget, QTreeWidget, QTreeWidgetItem, QTreeWidgetItemIterator,
+                             QVBoxLayout, QWidget)
 
 import analysis as A
 import collectors as C
@@ -26,15 +27,16 @@ import report
 SEV_COLORS = {"Critical": "#ff3b5c", "High": "#ff8a3d", "Medium": "#f5c542", "Low": "#4cc9f0", "Info": "#8892a6"}
 SEV_RANK = A.SEV_RANK
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+VERSION = "1.1"
 
 COLUMNS = {
     "findings": ["Severity", "Score", "Category", "Title", "Entity", "MITRE", "Technique", "Time", "Detail"],
-    "processes": ["Severity", "PID", "PPID", "Name", "Parent", "User", "Path", "CmdLine", "Started", "Signature", "Signer", "SHA256", "Flags"],
-    "network": ["Severity", "Proto", "Local", "LPort", "Remote", "RPort", "Hostname", "State", "PID", "Process", "Scope", "Signature", "Path", "Flags"],
-    "persistence": ["Severity", "Type", "Name", "Location", "Value", "Target", "Signature", "Signer", "Context", "Modified", "Flags"],
+    "processes": ["Severity", "PID", "PPID", "Name", "Parent", "User", "Path", "CmdLine", "Started", "Signature", "Signer", "SHA256", "New", "Flags"],
+    "network": ["Severity", "Proto", "Local", "LPort", "Remote", "RPort", "Hostname", "State", "PID", "Process", "Scope", "Signature", "Path", "New", "Flags"],
+    "persistence": ["Severity", "Type", "Name", "Location", "Value", "Target", "Signature", "Signer", "Context", "Modified", "New", "Flags"],
     "events": ["Severity", "Time", "Log", "EventID", "Provider", "Detail", "Message", "Flags"],
-    "files": ["Severity", "Kind", "Name", "Path", "Size", "Created", "Modified", "Signature", "SHA256", "Flags"],
-    "artifacts": ["Severity", "Category", "Name", "Detail", "Time", "Flags"],
+    "files": ["Severity", "Kind", "Name", "Path", "Size", "Created", "Modified", "Signature", "SHA256", "New", "Flags"],
+    "artifacts": ["Severity", "Category", "Name", "Detail", "Time", "New", "Flags"],
     "timeline": ["Time", "Severity", "Source", "Event", "Summary"],
     "iocs": ["Severity", "Type", "Value", "Count", "Context", "Sources", "VT"],
 }
@@ -174,6 +176,7 @@ class TablePage(QWidget):
         self.view.setModel(self.proxy)
         self.view.setSortingEnabled(True)
         self.view.setAlternatingRowColors(True)
+        self.view.setTextElideMode(Qt.ElideMiddle)
         self.view.setSelectionBehavior(QTableView.SelectRows)
         self.view.setEditTriggers(QTableView.NoEditTriggers)
         self.view.verticalHeader().setVisible(False)
@@ -229,10 +232,22 @@ class TablePage(QWidget):
         if not idx.isValid():
             return
         m = QMenu(self)
-        a1, a2, a3 = m.addAction("Copy cell"), m.addAction("Copy row as JSON"), m.addAction("Filter by this value")
-        act = m.exec_(self.view.viewport().mapToGlobal(pos))
         src = self.proxy.mapToSource(idx)
         row, col = self.model.rows[src.row()], self.model.columns[src.column()]
+        a1, a2, a3 = m.addAction("Copy cell"), m.addAction("Copy row as JSON"), m.addAction("Filter by this value")
+        m.addSeparator()
+        allow = {}
+        for label, kind, val in (("Allowlist this name", "names", row.get("Name") or row.get("Process")),
+                                 ("Allowlist this path", "paths", row.get("Path") or row.get("Target")),
+                                 ("Allowlist this hash", "hashes", row.get("SHA256")),
+                                 ("Allowlist this finding title", "titles", row.get("Title"))):
+            if val:
+                allow[m.addAction(label)] = (kind, str(val))
+        act = m.exec_(self.view.viewport().mapToGlobal(pos))
+        if act in allow:
+            A.add_allow(*allow[act])
+            QMessageBox.information(self, "Allowlist updated", "Saved to allowlist.json. It is applied on the next triage run.")
+            return
         if act == a1:
             QApplication.clipboard().setText(str(row.get(col, "")))
         elif act == a2:
@@ -307,7 +322,7 @@ class BarChart(QWidget):
         n = len(self.items)
         rh = min(34.0, (self.height() - 10) / n)
         mx = max(c for _, _, c in self.items)
-        left, right = 270, 50
+        left, right = int(min(270, self.width() * 0.55)), 50
         for i, (tid, name, cnt) in enumerate(self.items):
             y = 6 + i * rh
             p.setPen(QColor("#9fb0d0"))
@@ -322,6 +337,104 @@ class BarChart(QWidget):
             p.drawRoundedRect(QRectF(left, y + rh * 0.18, max(w, 4), rh * 0.64), 5, 5)
             p.setPen(QColor("#ffffff"))
             p.drawText(QRectF(left + w + 8, y, 40, rh), Qt.AlignVCenter, str(cnt))
+
+
+class ProcessTree(QWidget):
+    HEAD = ["Process", "PID", "User", "Signature", "Severity", "Command line"]
+
+    def __init__(self):
+        super().__init__()
+        self.matches, self.mi = [], -1
+        self.tree = QTreeWidget()
+        self.tree.setColumnCount(len(self.HEAD))
+        self.tree.setHeaderLabels(self.HEAD)
+        self.tree.setAlternatingRowColors(True)
+        self.tree.setUniformRowHeights(True)
+        self.tree.setStyleSheet("QTreeWidget{background:#0f1524;alternate-background-color:#121a2c;border:none}"
+                                "QTreeWidget::item:selected{background:#2b3a67}")
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("Find process by name / PID / command line, press Enter (again for next match)...")
+        b1, b2, b3 = QPushButton("Expand all"), QPushButton("Collapse all"), QPushButton("Show flagged branches")
+        top = QHBoxLayout()
+        for w in (self.search, b1, b2, b3):
+            top.addWidget(w)
+        top.setStretch(0, 1)
+        lay = QVBoxLayout(self)
+        lay.addLayout(top)
+        lay.addWidget(self.tree)
+        b1.clicked.connect(self.tree.expandAll)
+        b2.clicked.connect(self.tree.collapseAll)
+        b3.clicked.connect(self.show_flagged)
+        self.search.returnPressed.connect(self.find)
+
+    def set_rows(self, rows):
+        self.tree.clear()
+        by_pid = {r["PID"]: r for r in rows}
+        kids, roots = {}, []
+        for r in rows:
+            p = r["PPID"]
+            if p == r["PID"] or p not in by_pid or not r.get("Parent"):
+                roots.append(r)
+            else:
+                kids.setdefault(p, []).append(r)
+        seen = set()
+        self.flagged = []
+
+        def build(r, parent):
+            if r["PID"] in seen:
+                return
+            seen.add(r["PID"])
+            it = QTreeWidgetItem([r["Name"] or "(unknown)", str(r["PID"]), r["User"], r.get("Signature", ""),
+                                  r.get("Severity", ""), (r["CmdLine"] or r["Path"])[:240]])
+            (parent or self.tree.invisibleRootItem()).addChild(it)
+            sev = r.get("Severity", "")
+            if sev in SEV_COLORS:
+                col = QColor(SEV_COLORS[sev])
+                if SEV_RANK[sev] >= 2:
+                    for c in range(len(self.HEAD)):
+                        it.setForeground(c, QBrush(col))
+                    self.flagged.append(it)
+                it.setBackground(4, col)
+                it.setForeground(4, QBrush(QColor("#0b0f19")))
+            for k in sorted(kids.get(r["PID"], []), key=lambda x: x["PID"]):
+                build(k, it)
+
+        for r in sorted(roots, key=lambda x: x["PID"]):
+            build(r, None)
+        for i, w in enumerate((260, 70, 170, 90, 80)):
+            self.tree.setColumnWidth(i, w)
+        self.show_flagged()
+
+    def show_flagged(self):
+        self.tree.collapseAll()
+        for it in self.flagged:
+            p = it.parent()
+            while p:
+                p.setExpanded(True)
+                p = p.parent()
+
+    def find(self):
+        text = self.search.text().lower().strip()
+        if not text:
+            return
+        if not self.matches or self.search.property("last") != text:
+            self.matches, self.mi = [], -1
+            it = QTreeWidgetItemIterator(self.tree)
+            while it.value():
+                item = it.value()
+                if text in " ".join(item.text(c) for c in range(len(self.HEAD))).lower():
+                    self.matches.append(item)
+                it += 1
+            self.search.setProperty("last", text)
+        if self.matches:
+            self.mi = (self.mi + 1) % len(self.matches)
+            item = self.matches[self.mi]
+            p = item.parent()
+            while p:
+                p.setExpanded(True)
+                p = p.parent()
+            self.tree.setCurrentItem(item)
+            self.tree.scrollToItem(item)
 
 
 def make_card(title=""):
@@ -375,7 +488,8 @@ class Dashboard(QWidget):
         self.top = QListWidget()
         flay.addWidget(self.top)
         grid.addWidget(fcard, 2, 1)
-        grid.setColumnStretch(1, 1)
+        grid.setColumnStretch(0, 2)
+        grid.setColumnStretch(1, 3)
         grid.setRowStretch(2, 1)
 
     def update_data(self, data):
@@ -390,10 +504,10 @@ class Dashboard(QWidget):
             "<tr><td style='color:#8892a6'>OS</td><td>%s</td><td style='color:#8892a6'>Admin</td><td>%s</td></tr>"
             "<tr><td style='color:#8892a6'>IPs</td><td>%s</td><td style='color:#8892a6'>Boot</td><td>%s</td></tr>"
             "<tr><td style='color:#8892a6'>Records</td><td colspan='3'>%d processes, %d connections, %d persistence, %d events, %d files, %d IOCs</td></tr>"
-            "<tr><td style='color:#8892a6'>Duration</td><td>%ss</td><td></td><td></td></tr></table>%s" % (
+            "<tr><td style='color:#8892a6'>Duration</td><td>%ss</td><td style='color:#8892a6'>Baseline</td><td>%s</td></tr></table>%s" % (
                 m["Hostname"], m["Analyst"], m["OS"], "Yes" if m["Admin"] else "No", m["IPAddresses"], m["BootTime"],
                 len(data["processes"]), len(data["network"]), len(data["persistence"]), len(data["events"]),
-                len(data["files"]), len(data["iocs"]), m.get("DurationSeconds", "?"), warn))
+                len(data["files"]), len(data["iocs"]), m.get("DurationSeconds", "?"), m.get("Baseline", "none"), warn))
         self.chart.set_items(s["top_mitre"][:8])
         self.top.clear()
         for f in data["findings"][:25]:
@@ -450,7 +564,7 @@ class VTWorker(QThread):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("IR Triage Toolkit  |  Project 09  |  Blue Team")
+        self.setWindowTitle("IR Triage Toolkit v%s  |  Project 09  |  Blue Team" % VERSION)
         self.resize(1520, 920)
         self.data, self.worker, self.vt = None, None, None
 
@@ -463,7 +577,7 @@ class MainWindow(QMainWindow):
         header.setObjectName("header")
         shadow(header, 24, 6)
         hl = QHBoxLayout(header)
-        title = QLabel("<span style='font-size:22pt;font-weight:800'>IR TRIAGE TOOLKIT</span><br>"
+        title = QLabel("<span style='font-size:22pt;font-weight:800'>IR TRIAGE TOOLKIT</span> <span style='font-size:11pt;color:#4cc9f0'>v1.1</span><br>"
                        "<span style='color:#9fb0d0'>Live volatile-artifact collection &middot; timeline &middot; IOC extraction &middot; MITRE ATT&amp;CK</span>")
         hl.addWidget(title, 1)
         admin = C.is_admin()
@@ -499,11 +613,13 @@ class MainWindow(QMainWindow):
         self.btn_export.setEnabled(False)
         self.btn_vt = QPushButton("VirusTotal Enrich")
         self.btn_vt.setEnabled(False)
+        self.btn_base = QPushButton("Save Baseline")
+        self.btn_base.setEnabled(False)
         for w in (QLabel("Analyst"), self.analyst, QLabel("Event window (h)"), self.hours, QLabel("File window (days)"), self.days,
                   self.chk_sig, self.chk_hash, self.chk_evt):
             ctl.addWidget(w)
         ctl.addStretch(1)
-        for w in (self.btn_start, self.btn_cancel, self.btn_export, self.btn_vt):
+        for w in (self.btn_start, self.btn_cancel, self.btn_export, self.btn_vt, self.btn_base):
             ctl.addWidget(w)
         lay.addLayout(ctl)
 
@@ -528,12 +644,31 @@ class MainWindow(QMainWindow):
             pg = TablePage(key, sorts[key])
             self.pages[key] = pg
             self.tabs.addTab(pg, label)
+        self.tree_page = ProcessTree()
+        self.tabs.insertTab(3, self.tree_page, "Process Tree")
         lay.addWidget(self.tabs, 1)
 
         self.btn_start.clicked.connect(self.start)
         self.btn_cancel.clicked.connect(lambda: self.worker and self.worker.cancel())
         self.btn_export.clicked.connect(self.export_case)
         self.btn_vt.clicked.connect(self.vt_enrich)
+        self.btn_base.clicked.connect(self.save_baseline)
+        QTimer.singleShot(600, self.ask_admin)
+
+    def ask_admin(self):
+        if C.is_admin():
+            return
+        r = QMessageBox.question(self, "Administrator recommended",
+                                 "Without Administrator the Security log, Prefetch and Defender exclusions are hidden.\n\nRelaunch as Administrator now?",
+                                 QMessageBox.Yes | QMessageBox.No)
+        if r == QMessageBox.Yes:
+            self.relaunch_admin()
+
+    def save_baseline(self):
+        if not self.data:
+            return
+        path = A.save_baseline(self.data)
+        QMessageBox.information(self, "Baseline saved", "Known-good snapshot saved to:\n%s\n\nFuture runs will mark anything new as NEW and raise findings for new persistence, accounts, shares and listeners." % path)
 
     # ---- actions
     def relaunch_admin(self):
@@ -551,6 +686,7 @@ class MainWindow(QMainWindow):
         self.btn_cancel.setEnabled(True)
         self.btn_export.setEnabled(False)
         self.btn_vt.setEnabled(False)
+        self.btn_base.setEnabled(False)
         self.bar.setValue(0)
         self.worker = TriageWorker(opts)
         self.worker.progress.connect(lambda p, m: (self.bar.setValue(p), self.status.setText(m)))
@@ -568,7 +704,9 @@ class MainWindow(QMainWindow):
         self.data = data
         for key, pg in self.pages.items():
             pg.set_rows(data[key])
+        self.tree_page.set_rows(data["processes"])
         self.dash.update_data(data)
+        self.btn_base.setEnabled(True)
         self.tabs.setCurrentIndex(0)
         s = data["summary"]
         self.status.setText("Triage complete in %ss: %d findings (%d critical, %d high), %d IOCs"

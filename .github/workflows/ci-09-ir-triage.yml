@@ -1,0 +1,24 @@
+name: 09 IR Triage Toolkit CI
+
+on:
+  push:
+    paths: ["09-Incident-Response-Triage-Toolkit/**"]
+  pull_request:
+    paths: ["09-Incident-Response-Triage-Toolkit/**"]
+
+jobs:
+  test:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: 09-Incident-Response-Triage-Toolkit
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install psutil
+      - name: Syntax check
+        run: python -m py_compile collectors.py analysis.py engine.py report.py main.py
+      - name: Unit tests
+        run: python -m unittest discover -s tests -v

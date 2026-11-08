@@ -28,12 +28,14 @@ except ImportError:  # not on Windows
 NOWIN = 0x08000000 if os.name == "nt" else 0
 TS = "%Y-%m-%d %H:%M:%S"
 SYSROOT = os.environ.get("SystemRoot", r"C:\Windows")
-TOOL_NAME = "IR Triage Toolkit 1.0.0"
+TOOL_NAME = "IR Triage Toolkit 1.1.0"
 
 
 # --------------------------------------------------------------------------- helpers
 def fmt_ts(epoch):
     try:
+        if float(epoch) <= 86400:
+            return ""
         return datetime.fromtimestamp(float(epoch)).strftime(TS)
     except Exception:
         return ""
@@ -429,7 +431,8 @@ def collect_artifacts():
         elif cat == "Admin":
             add("Local Administrator", name, "%s (%s)" % (a, b))
         elif cat == "DNS":
-            add("DNS Cache", name, "Type %s -> %s" % (a, b))
+            if b:
+                add("DNS Cache", name, "Type %s -> %s" % (a, b))
         elif cat == "ARP":
             add("ARP Neighbor", name, "MAC=%s State=%s" % (a, b))
         elif cat == "Share":
@@ -439,7 +442,8 @@ def collect_artifacts():
         elif cat == "Defender":
             add("Defender", "Status", "AV enabled=%s; Real-time=%s; Signature age (days)=%s" % (a, b, c))
         elif cat == "DefenderExclusion":
-            add("Defender Exclusion", name, a)
+            if "administrator" not in a.lower():  # non-admin sessions get an 'N/A' placeholder
+                add("Defender Exclusion", name, a)
 
     # Logged-on sessions
     try:
@@ -457,7 +461,7 @@ def collect_artifacts():
     hosts = os.path.join(SYSROOT, r"System32\drivers\etc\hosts")
     try:
         mt = fmt_ts(os.path.getmtime(hosts))
-        with open(hosts, "r", errors="ignore") as f:
+        with open(hosts, "r", encoding="utf-8-sig", errors="ignore") as f:
             for line in f:
                 line = line.strip()
                 if line and not line.startswith("#"):
@@ -473,7 +477,7 @@ SCRIPT_EXT = {".ps1", ".bat", ".cmd", ".vbs", ".vbe", ".js", ".jse", ".hta", ".w
 OTHER_EXT = {".lnk", ".iso", ".img", ".zip", ".rar", ".7z", ".docm", ".xlsm", ".pptm"}
 INTEREST = EXEC_EXT | SCRIPT_EXT | OTHER_EXT
 SKIP_DIRS = {"node_modules", ".git", "cache", "code cache", "gpucache", "crashpad", "__pycache__",
-             "site-packages", "microsoft", "windowsapps", "packages", "npm-cache"}
+             "site-packages", "microsoft", "windowsapps", "packages", "npm-cache", ".venv", "venv"}
 
 
 def _scan_dirs():

@@ -52,9 +52,11 @@ def run_triage(opts, progress=lambda pct, msg: None, cancelled=lambda: False):
     dns = {}
     for a in arts:
         if a["Category"] == "DNS Cache" and "->" in a["Detail"]:
-            dns[a["Detail"].split("->")[1].strip()] = a["Name"]
+            ip = a["Detail"].split("->")[1].strip()
+            if ip:
+                dns[ip] = a["Name"]
     for r in net:
-        r["Hostname"] = dns.get(r["Remote"], "")
+        r["Hostname"] = dns.get(r["Remote"], "") if r["Remote"] else ""
 
     step(62, "Scanning user-writable directories for recent files")
     files = C.collect_files(opts.get("days", 7), opts.get("hash_files", True))

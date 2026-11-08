@@ -10,6 +10,11 @@ import urllib.error
 import urllib.request
 from collections import Counter, defaultdict
 
+BASE = os.path.dirname(os.path.abspath(__file__))
+ALLOW_PATH = os.path.join(BASE, "allowlist.json")
+BASELINE_PATH = os.path.join(BASE, "baseline.json")
+PYSCRIPT_RX = re.compile(r"\\python\d*\\(scripts|lib)\\|\\site-packages\\")
+
 SEV_RANK = {"Critical": 4, "High": 3, "Medium": 2, "Low": 1, "Info": 0}
 SEV_SCORE = {"Critical": 90, "High": 70, "Medium": 45, "Low": 20, "Info": 5}
 SYSROOT = os.environ.get("SystemRoot", r"C:\Windows").lower()
@@ -151,6 +156,75 @@ def osa1(a, b):
     return d[la][lb] == 1
 
 
+def load_allowlist():
+    try:
+        with open(ALLOW_PATH, encoding="utf-8") as f:
+            d = json.load(f)
+    except Exception:
+        d = {}
+    out = {}
+    for k in ("names", "paths", "hashes", "titles"):
+        vals = {str(x).lower().strip() for x in d.get(k, []) if str(x).strip()}
+        out[k] = {n(v) for v in vals} if k == "paths" else vals
+    return out
+
+
+def add_allow(kind, value):
+    """Persist an allowlist entry (kind: names | paths | hashes | titles)."""
+    try:
+        with open(ALLOW_PATH, encoding="utf-8") as f:
+            d = json.load(f)
+    except Exception:
+        d = {}
+    d.setdefault("_help", "Entries here are suppressed on the next triage run. Keys: names, paths, hashes, titles.")
+    lst = d.setdefault(kind, [])
+    if value and value not in lst:
+        lst.append(value)
+    with open(ALLOW_PATH, "w", encoding="utf-8") as f:
+        json.dump(d, f, indent=2)
+
+
+def row_key(sec, r):
+    if sec == "processes":
+        return (r["Name"] or "").lower() + "|" + n(r["Path"])
+    if sec == "persistence":
+        return "%s|%s|%s" % (r["Type"], (r["Name"] or "").lower(), (r["Value"] or "").lower())
+    if sec == "network":
+        if r["Scope"] == "Public":
+            return "%s|%s|%s" % ((r["Process"] or "").lower(), r["Remote"], r["RPort"])
+        if r["State"] == "LISTEN":
+            return "%s|LISTEN|%s" % ((r["Process"] or "").lower(), r["LPort"])
+        return None
+    if sec == "files":
+        return n(r["Path"]) if r["Kind"] == "Dropped File" else None
+    if sec == "artifacts":
+        if r["Category"] in ("Local User", "Local Administrator", "SMB Share", "Hosts File"):
+            return "%s|%s|%s" % (r["Category"], r["Name"], (r["Detail"] or "")[:80])
+    return None
+
+
+BASELINE_SECTIONS = ("processes", "persistence", "network", "files", "artifacts")
+
+
+def save_baseline(data):
+    keys = {}
+    for sec in BASELINE_SECTIONS:
+        keys[sec] = sorted({k for k in (row_key(sec, r) for r in data[sec]) if k})
+    obj = {"created": data["meta"]["CollectionStartLocal"], "host": data["meta"]["Hostname"], "keys": keys}
+    with open(BASELINE_PATH, "w", encoding="utf-8") as f:
+        json.dump(obj, f)
+    return BASELINE_PATH
+
+
+def load_baseline(host):
+    try:
+        with open(BASELINE_PATH, encoding="utf-8") as f:
+            b = json.load(f)
+        return b if b.get("host") == host else None
+    except Exception:
+        return None
+
+
 def tag(row, sev, flag):
     if SEV_RANK[sev] > SEV_RANK.get(row.get("Severity", ""), -1):
         row["Severity"] = sev
@@ -215,11 +289,13 @@ def analyze_network(rows, add):
         ent = "%s:%s -> %s:%s (%s)" % (r["Local"], r["LPort"], r["Remote"], r["RPort"], r["Process"] or "PID %s" % r["PID"])
         ctx = "Process: %s (PID %s)\nPath: %s\nState: %s" % (r["Process"], r["PID"], r["Path"], r["State"])
         st = sig_state({"Signature": r.get("Signature", "")})
-        if r["State"] == "ESTABLISHED" and r["Scope"] == "Public":
+        if r["State"] in ("ESTABLISHED", "CLOSE_WAIT") and r["Scope"] == "Public":
             if pname in LOLBIN_NET:
                 add("High", "Network", "Script host / LOLBin with external connection: " + r["Process"], ctx, "T1071", ent, "", r)
             elif r["Path"] and user_writable(r["Path"]) and st != "valid":
                 add("High", "Network", "Unsigned/unknown program in user directory talking to the internet", ctx, "T1071", ent, "", r)
+            if r["Path"] and not user_writable(r["Path"]) and st in ("none", "bad") and pname not in LOLBIN_NET:
+                add("Medium", "Network", "Unsigned program communicating with a public IP: %s" % r["Process"], ctx, "T1071", ent, "", r)
             if r["RPort"] in SUSP_PORTS:
                 add("Medium", "Network", "Connection to port associated with C2/backdoors/Tor (%s)" % r["RPort"], ctx, "T1571", ent, "", r)
             if r["RPort"] in MINER_PORTS:
@@ -250,6 +326,8 @@ def analyze_persistence(rows, add):
             r["Location"], val[:500], tgt, r.get("Signature", ""), r.get("Signer", ""))
 
         if typ == "WMI Subscription":
+            if r["Name"] == "SCM Event Log Consumer" and "NTEventLogEventConsumer" in r["Location"]:
+                continue  # default Windows consumer, present on every install
             add("Critical", "Persistence", "WMI event consumer present (fileless persistence)", ctx, mit, ent, "", r)
             continue
         if typ == "IFEO":
@@ -276,7 +354,7 @@ def analyze_persistence(rows, add):
             add(writable_sev(st), "Persistence", "%s launches binary from user-writable path" % typ + (" (signed)" if st == "valid" else ""),
                 ctx, mit, ent, "", r)
             flagged = True
-        elif LOLBIN_RX.search(val) and typ != "Service":
+        elif LOLBIN_RX.search(val) and typ != "Service" and not (st == "valid" and tgt and trusted_loc(tgt)):
             add("Medium", "Persistence", "%s launches a script host / LOLBin" % typ, ctx, mit, ent, "", r)
             flagged = True
         elif typ == "Service" and LOLBIN_RX.search(val):
@@ -373,7 +451,7 @@ def analyze_artifacts(rows, add):
         elif cat == "Local Administrator" and not name.lower().endswith("\\administrator"):
             add("Low", "Accounts", "Non-default local administrator: " + name, det, "T1078", ent, "", r)
         elif cat == "Hosts File":
-            if not re.match(r"^(127\.0\.0\.1|::1|0\.0\.0\.0)\s+localhost\s*$", det):
+            if not re.match(r"^(127\.0\.0\.1|::1|0\.0\.0\.0)\s+localhost\s*$", det) and not re.search(r"\.docker\.internal\s*$", det):
                 add("Medium", "Network", "Custom hosts-file entry: " + det, det, "T1565.001", ent, r.get("Time", ""), r)
         elif cat == "SMB Share" and name not in ("ADMIN$", "C$", "IPC$") and not re.match(r"^[A-Z]\$$", name):
             add("Low", "Network", "Non-default SMB share: " + name, det, "T1021.002", ent, "", r)
@@ -406,7 +484,9 @@ def analyze_files(rows, add):
         if DOUBLE_EXT.search(name):
             add("High", "File", "Double-extension executable: " + name, ctx, "T1036.007", path, r["Modified"], r)
         elif ext in (".exe", ".dll", ".scr", ".com", ".cpl", ".msi"):
-            sev = "High" if st == "bad" else ("Medium" if st in ("none", "unknown") else "Low")
+            sev = "High" if st == "bad" else ("Medium" if st == "none" else "Low")
+            if PYSCRIPT_RX.search(n(path)):
+                sev = "Low"  # pip console-script launchers / package binaries
             add(sev, "File", "Recent executable in user-writable location" + (" (unsigned)" if st == "none" else ""),
                 ctx, "T1204.002", path, r["Modified"], r)
         elif ext in (".ps1", ".vbs", ".vbe", ".js", ".jse", ".hta", ".wsf", ".bat", ".cmd", ".jar"):
@@ -503,6 +583,8 @@ def extract_iocs(data):
                             continue
                         if typ == "Domain" and v.lower().endswith(BENIGN):
                             continue
+                        if typ == "URL" and any(b in v.lower().split("/")[2:3][0:1][0] if len(v.split("/")) > 2 else False for b in BENIGN):
+                            continue
                         put(typ, v.lower() if typ in ("Domain", "SHA256", "SHA1", "MD5", "Email") else v, ctx, sev, sec)
             if r.get("SHA256") and SEV_RANK[sev] >= 1:
                 put("SHA256", r["SHA256"], ctx, sev, sec)
@@ -551,7 +633,22 @@ def analyze(data):
             r.setdefault("Severity", "")
             r.setdefault("Flags", "")
 
+    allow = load_allowlist()
+
+    def allowed(row, title):
+        if any(t and t in title.lower() for t in allow["titles"]):
+            return True
+        if row is None:
+            return False
+        if any(str(row.get(k, "")).lower() in allow["names"] for k in ("Name", "Process") if row.get(k)):
+            return True
+        if any(n(row.get(k, "")) in allow["paths"] for k in ("Path", "Target") if row.get(k)):
+            return True
+        return any(str(row.get(k, "")).lower() in allow["hashes"] for k in ("SHA256", "TargetSHA256") if row.get(k))
+
     def add(sev, cat, title, detail, mitre="", entity="", when="", row=None):
+        if allowed(row, title):
+            return
         if row is not None:
             tag(row, sev, title)
         key = (title, entity)
@@ -568,9 +665,34 @@ def analyze(data):
     analyze_artifacts(data["artifacts"], add)
     analyze_files(data["files"], add)
 
+    # ---- baseline comparison (what is NEW since a known-good snapshot)
+    for sec in BASELINE_SECTIONS:
+        for r in data[sec]:
+            r["New"] = ""
+    base = load_baseline(data["meta"]["Hostname"])
+    data["meta"]["Baseline"] = base["created"] if base else "none"
+    if base:
+        for sec in BASELINE_SECTIONS:
+            known = set(base["keys"].get(sec, []))
+            for r in data[sec]:
+                k = row_key(sec, r)
+                if k and k not in known:
+                    r["New"] = "NEW"
+                    ctx = "New since baseline (%s)\n%s" % (base["created"], k)
+                    if sec == "persistence":
+                        add("Medium", "Baseline", "New persistence item since baseline: %s" % r["Name"], ctx,
+                            _persist_mitre(r["Type"]), "%s: %s" % (r["Type"], r["Name"]), "", r)
+                    elif sec == "artifacts":
+                        add("Medium", "Baseline", "New %s since baseline: %s" % (r["Category"].lower(), r["Name"]), ctx,
+                            "T1136.001" if "User" in r["Category"] or "Admin" in r["Category"] else "T1565.001",
+                            "%s: %s" % (r["Category"], r["Name"]), "", r)
+                    elif sec == "network" and r["State"] == "LISTEN" and r["Process"]:
+                        add("Low", "Baseline", "New listening port since baseline: %s:%s" % (r["Process"], r["LPort"]), ctx,
+                            "T1571", "%s:%s" % (r["Process"], r["LPort"]), "", r)
+
     findings.sort(key=lambda f: (-SEV_RANK[f["Severity"]], f["Title"]))
     c = Counter(f["Severity"] for f in findings)
-    score = min(100, c["Critical"] * 30 + c["High"] * 12 + c["Medium"] * 4 + c["Low"])
+    score = min(100, c["Critical"] * 30 + min(c["High"] * 12, 40) + min(c["Medium"] * 2, 15) + min(c["Low"], 5))
     techs = Counter(f["MITRE"] for f in findings if f["MITRE"])
     data["findings"] = findings
     data["timeline"] = build_timeline(data)
