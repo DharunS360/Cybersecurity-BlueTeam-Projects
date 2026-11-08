@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Runtime output (generated locally, may contain network data)
+logs/
+reports/
+data/

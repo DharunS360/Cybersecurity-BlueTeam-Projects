@@ -1,0 +1,5 @@
+PyQt5>=5.15,<6
+pyqtgraph>=0.13,<1
+scapy>=2.5,<3
+requests>=2.31,<3
+psutil>=5.9,<8

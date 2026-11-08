@@ -1,0 +1,4 @@
+PyQt5>=5.15
+dnspython>=2.4
+requests>=2.31
+dkimpy>=1.1
