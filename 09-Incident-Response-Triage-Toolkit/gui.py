@@ -562,8 +562,9 @@ class VTWorker(QThread):
 
 # --------------------------------------------------------------------------- main window
 class MainWindow(QMainWindow):
-    def __init__(self):
+    def __init__(self, auto=False):
         super().__init__()
+        self.auto = auto
         self.setWindowTitle("IR Triage Toolkit v%s  |  Project 09  |  Blue Team" % VERSION)
         self.resize(1520, 920)
         self.data, self.worker, self.vt = None, None, None
@@ -615,11 +616,13 @@ class MainWindow(QMainWindow):
         self.btn_vt.setEnabled(False)
         self.btn_base = QPushButton("Save Baseline")
         self.btn_base.setEnabled(False)
+        self.btn_shots = QPushButton("Save Screenshots")
+        self.btn_shots.setEnabled(False)
         for w in (QLabel("Analyst"), self.analyst, QLabel("Event window (h)"), self.hours, QLabel("File window (days)"), self.days,
                   self.chk_sig, self.chk_hash, self.chk_evt):
             ctl.addWidget(w)
         ctl.addStretch(1)
-        for w in (self.btn_start, self.btn_cancel, self.btn_export, self.btn_vt, self.btn_base):
+        for w in (self.btn_start, self.btn_cancel, self.btn_export, self.btn_vt, self.btn_base, self.btn_shots):
             ctl.addWidget(w)
         lay.addLayout(ctl)
 
@@ -653,7 +656,11 @@ class MainWindow(QMainWindow):
         self.btn_export.clicked.connect(self.export_case)
         self.btn_vt.clicked.connect(self.vt_enrich)
         self.btn_base.clicked.connect(self.save_baseline)
-        QTimer.singleShot(600, self.ask_admin)
+        self.btn_shots.clicked.connect(self.save_shots)
+        if not auto:
+            QTimer.singleShot(600, self.ask_admin)
+        else:
+            QTimer.singleShot(900, self.start)
 
     def ask_admin(self):
         if C.is_admin():
@@ -663,6 +670,27 @@ class MainWindow(QMainWindow):
                                  QMessageBox.Yes | QMessageBox.No)
         if r == QMessageBox.Yes:
             self.relaunch_admin()
+
+    def save_shots(self, quiet=False):
+        """Capture the README screenshots from the live window into docs/screenshots."""
+        out = os.path.join(BASE_DIR, "docs", "screenshots")
+        os.makedirs(out, exist_ok=True)
+        plan = [("dashboard", 0), ("findings", self.tabs.indexOf(self.pages["findings"])),
+                ("process-tree", self.tabs.indexOf(self.tree_page)), ("timeline", self.tabs.indexOf(self.pages["timeline"]))]
+        for name, idx in plan:
+            self.tabs.setCurrentIndex(idx)
+            QApplication.processEvents()
+            self.repaint()
+            QApplication.processEvents()
+            self.grab().save(os.path.join(out, name + ".png"))
+        self.tabs.setCurrentIndex(0)
+        if not quiet:
+            QMessageBox.information(self, "Screenshots saved", "Saved dashboard, findings, process-tree and timeline PNGs to:\n%s" % out)
+        return out
+
+    def auto_finish(self):
+        print("Screenshots saved to:", self.save_shots(quiet=True))
+        QApplication.quit()
 
     def save_baseline(self):
         if not self.data:
@@ -687,6 +715,7 @@ class MainWindow(QMainWindow):
         self.btn_export.setEnabled(False)
         self.btn_vt.setEnabled(False)
         self.btn_base.setEnabled(False)
+        self.btn_shots.setEnabled(False)
         self.bar.setValue(0)
         self.worker = TriageWorker(opts)
         self.worker.progress.connect(lambda p, m: (self.bar.setValue(p), self.status.setText(m)))
@@ -707,7 +736,10 @@ class MainWindow(QMainWindow):
         self.tree_page.set_rows(data["processes"])
         self.dash.update_data(data)
         self.btn_base.setEnabled(True)
+        self.btn_shots.setEnabled(True)
         self.tabs.setCurrentIndex(0)
+        if self.auto:
+            QTimer.singleShot(2500, self.auto_finish)
         s = data["summary"]
         self.status.setText("Triage complete in %ss: %d findings (%d critical, %d high), %d IOCs"
                             % (data["meta"].get("DurationSeconds", "?"), len(data["findings"]), s["counts"]["Critical"], s["counts"]["High"], len(data["iocs"])))
@@ -766,11 +798,13 @@ class MainWindow(QMainWindow):
         self.btn_vt.setEnabled(True)
 
 
-def run_gui():
+def run_gui(auto=False):
     if hasattr(Qt, "AA_EnableHighDpiScaling"):
         QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
     app = QApplication(sys.argv)
     app.setStyleSheet(STYLE)
-    win = MainWindow()
+    win = MainWindow(auto)
+    if auto:
+        win.resize(1600, 960)
     win.show()
     sys.exit(app.exec_())

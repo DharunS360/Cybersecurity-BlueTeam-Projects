@@ -18,6 +18,8 @@ def main():
     ap.add_argument("--no-sig", action="store_true", help="skip Authenticode signature verification (faster)")
     ap.add_argument("--no-hash", action="store_true", help="skip hashing of recently dropped files")
     ap.add_argument("--no-events", action="store_true", help="skip event-log collection")
+    ap.add_argument("--auto-shots", action="store_true",
+                    help="GUI mode: run a triage, save README screenshots to docs/screenshots, then exit")
     ap.add_argument("--out", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "cases"),
                     help="output folder for case exports")
     args = ap.parse_args()
@@ -48,7 +50,7 @@ def main():
     except ImportError as e:
         print("Missing dependency (%s). Run:  pip install -r requirements.txt" % e)
         return 1
-    gui.run_gui()
+    gui.run_gui(auto=args.auto_shots)
     return 0
 
 

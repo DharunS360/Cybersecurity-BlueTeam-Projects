@@ -9,8 +9,10 @@ forensically-minded **case folder** (HTML report, JSON, CSV, IOC feed, chain of 
 | Dashboard | Process tree |
 |---|---|
 | ![Dashboard](docs/screenshots/dashboard.png) | ![Process tree](docs/screenshots/process-tree.png) |
-| **Findings** | **HTML case report** |
-| ![Findings](docs/screenshots/findings.png) | ![Report](docs/screenshots/report.png) |
+| **Findings** | **Unified timeline** |
+| ![Findings](docs/screenshots/findings.png) | ![Timeline](docs/screenshots/timeline.png) |
+
+*Screenshots are captured from a live triage of the author's own workstation (`python main.py --auto-shots`).*
 
 ## What it collects
 
