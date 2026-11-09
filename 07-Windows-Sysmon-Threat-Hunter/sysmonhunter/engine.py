@@ -34,7 +34,13 @@ def brute_force(events):
     groups = defaultdict(list)
     for ev in events:
         if ev["eid"] == 4625:
-            groups[(ev["host"], ev["data"].get("IpAddress") or "-")].append(ev)
+            # Do not merge unrelated failures into one brute-force source when
+            # Windows reports a missing/placeholder IP address.
+            ip = (ev["data"].get("IpAddress") or "").strip()
+            workstation = (ev["data"].get("WorkstationName") or "").strip()
+            user = (ev["data"].get("TargetUserName") or "").strip().lower()
+            source = ip if ip and ip not in ("-", "::", "0.0.0.0") else "unknown:%s:%s" % (workstation, user)
+            groups[(ev["host"], source)].append(ev)
     out = []
     for (host, ip), lst in groups.items():
         lst.sort(key=lambda e: e["time"])
@@ -47,12 +53,15 @@ def brute_force(events):
         if best_n < 5:
             continue
         win = lst[best_i:best_i + best_n]
-        users = {e["data"].get("TargetUserName", "") for e in win}
+        users = {str(e["data"].get("TargetUserName", "")).strip() for e in win if str(e["data"].get("TargetUserName", "")).strip()}
         last = win[-1]["time"]
+        failed_users = {str(e["data"].get("TargetUserName", "")).strip().casefold() for e in win}
         ok = next((e for e in events if e["eid"] == 4624 and e["host"] == host and
-                   (e["data"].get("IpAddress") or "-") == ip and
+                   (e["data"].get("IpAddress") or "").strip() == ip and
+                   str(e["data"].get("TargetUserName", "")).strip().casefold() in failed_users and
+                   bool(ip) and ip not in ("-", "::", "0.0.0.0") and
                    last <= e["time"] <= last + timedelta(seconds=600)), None)
-        spray = len(users) >= 5
+        spray = len({u.casefold() for u in users}) >= 5
         meta = dict(META["HUNT-101"])
         meta["name"] = "Password spraying" if spray else "Brute force logon attempts"
         meta["technique"] = "T1110.003" if spray else "T1110.001"
@@ -102,7 +111,8 @@ def correlate(findings):
             win = [f for f in lst[i:] if _secs(t0, f["time"]) <= 1800]
             if len({f["tactic"] for f in win}) > len({f["tactic"] for f in best}):
                 best = win
-        tactics = {f["tactic"] for f in best}
+        tactics = {f["tactic"] for f in best if f.get("tactic") in TACTICS and f.get("technique") not in (None, "", "N/A")}
+        best = [f for f in best if f.get("tactic") in tactics and f.get("technique") not in (None, "", "N/A")]
         if len(tactics) >= 3:
             ordered = [t for t in TACTICS if t in tactics]
             ev = {"time": _parse(best[-1]["time"]), "host": host, "eid": 0, "data": {}}
@@ -123,14 +133,16 @@ def _secs(a, b):
     return (_parse(b) - _parse(a)).total_seconds()
 
 
-def analyze(events):
+def analyze(events, diagnostics=None):
+    diagnostics = diagnostics if diagnostics is not None else []
     events = sorted(events, key=lambda e: e["time"])
     findings = []
     for ev in events:
         for r in STATELESS:
             try:
                 res = r["fn"](ev)
-            except Exception:
+            except Exception as exc:
+                diagnostics.append({"rule_id": r.get("id", "unknown"), "error": type(exc).__name__})
                 continue
             if not res:
                 continue

@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Sysmon schemaversion="4.91">
+  <!--
+    SysmonHunter telemetry profile.
+    This file configures collection only; it does not detect or block threats.
+    Review event volume and your installed Sysmon schema before applying.
+  -->
+  <HashAlgorithms>SHA256</HashAlgorithms>
+  <EventFiltering>
+    <!-- Core process and network telemetry. -->
+    <ProcessCreate onmatch="exclude" />
+    <NetworkConnect onmatch="exclude" />
+
+    <!-- Capture unsigned image loads; reduces the volume of Event ID 7. -->
+    <ImageLoad onmatch="include">
+      <Signed>false</Signed>
+    </ImageLoad>
+
+    <!-- Capture remote-thread activity for injection investigations. -->
+    <CreateRemoteThread onmatch="exclude" />
+
+    <!-- Focus process-access telemetry on LSASS to reduce Event ID 10 noise. -->
+    <ProcessAccess onmatch="include">
+      <TargetImage condition="end with">\lsass.exe</TargetImage>
+    </ProcessAccess>
+
+    <!-- Capture file writes relevant to downloads, startup persistence and spooler abuse. -->
+    <FileCreate onmatch="include">
+      <TargetFilename condition="contains">\Downloads\</TargetFilename>
+      <TargetFilename condition="contains">\Temp\</TargetFilename>
+      <TargetFilename condition="contains">\Start Menu\Programs\Startup\</TargetFilename>
+      <TargetFilename condition="contains">\spool\drivers\x64\3\</TargetFilename>
+      <TargetFilename condition="end with">\autorun.inf</TargetFilename>
+    </FileCreate>
+
+    <!-- Capture selected persistence / UAC / credential-related registry changes. -->
+    <RegistryEvent onmatch="include">
+      <TargetObject condition="contains">\CurrentVersion\Run</TargetObject>
+      <TargetObject condition="contains">\ms-settings\</TargetObject>
+      <TargetObject condition="contains">\mscfile\</TargetObject>
+      <TargetObject condition="contains">\exefile\</TargetObject>
+      <TargetObject condition="contains">\Environment\</TargetObject>
+      <TargetObject condition="contains">\WDigest\</TargetObject>
+    </RegistryEvent>
+
+    <!-- Named pipes and WMI persistence activity. -->
+    <PipeEvent onmatch="exclude" />
+    <WmiEvent onmatch="exclude" />
+
+    <!-- DNS query telemetry used by domain / beaconing hunts. -->
+    <DnsQuery onmatch="exclude" />
+
+    <!-- Alternate data stream visibility. -->
+    <FileCreateStreamHash onmatch="exclude" />
+
+    <!-- Process image tampering and file deletion telemetry (no file archiving). -->
+    <ProcessTampering onmatch="exclude" />
+    <FileDeleteDetected onmatch="exclude" />
+  </EventFiltering>
+</Sysmon>

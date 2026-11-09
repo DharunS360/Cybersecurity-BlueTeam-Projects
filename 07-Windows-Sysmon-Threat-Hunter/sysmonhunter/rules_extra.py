@@ -7,7 +7,7 @@ from .rules import SHELLS, TACTICS, base, get, is_sysmon, pc, rule
 
 TACTICS[:] = ["Initial Access", "Execution", "Persistence", "Privilege Escalation",
               "Defense Evasion", "Credential Access", "Discovery", "Lateral Movement",
-              "Collection", "Command and Control", "Exfiltration", "Impact"]
+              "Collection", "Command and Control", "Exfiltration", "Impact", "Correlation"]
 
 DEFENDER = "Microsoft-Windows-Windows Defender/Operational"
 if DEFENDER not in LIVE_CHANNELS:
@@ -18,6 +18,10 @@ _n = [25]
 
 def _id():
     _n[0] += 1
+    # HUNT-101..HUNT-103 are reserved for the three stateful engine rules.
+    # Keep the stateless catalogue IDs unique for reports and investigations.
+    if 101 <= _n[0] <= 103:
+        _n[0] = 104
     return "HUNT-%03d" % _n[0]
 
 

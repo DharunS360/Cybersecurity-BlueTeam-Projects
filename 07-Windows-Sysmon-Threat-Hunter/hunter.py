@@ -9,7 +9,6 @@ import sys
 from datetime import datetime
 
 from sysmonhunter import __version__
-from sysmonhunter.demo import generate
 from sysmonhunter.engine import analyze
 from sysmonhunter.parser import LIVE_CHANNELS, is_admin, read_evtx, read_live
 from sysmonhunter.report import write_report
@@ -32,7 +31,6 @@ def main():
     os.system("")  # enable ANSI colours on Windows terminals
     ap = argparse.ArgumentParser(prog="hunter", description="Hunt for ATT&CK-mapped threats in Windows logs.")
     mode = ap.add_mutually_exclusive_group()
-    mode.add_argument("--demo", action="store_true", help="analyse a built-in simulated attack (no setup needed)")
     mode.add_argument("--live", action="store_true", help="analyse this machine's event logs (run as Administrator)")
     mode.add_argument("--evtx", nargs="+", metavar="PATH", help="analyse .evtx file(s) or folder(s)")
     ap.add_argument("--max", type=int, default=3000, help="max events per channel in --live mode (default 3000)")
@@ -46,14 +44,11 @@ def main():
         for r in catalog():
             print("%-9s %-8s %-10s %-22s %s" % (r["id"], r["severity"], r["technique"], r["tactic"], r["name"]))
         return 0
-    if not (args.demo or args.live or args.evtx):
-        args.demo = True
-        print(C["dim"] + "[i] No mode given - running --demo. Use --live or --evtx for real data." + C["end"])
+    if not (args.live or args.evtx):
+        ap.error("Choose a real data source: --live or --evtx PATH [PATH ...]")
 
     events, source = [], ""
-    if args.demo:
-        events, source = generate(), "Demo dataset (simulated intrusion)"
-    elif args.live:
+    if args.live:
         source = "Live logs: " + os.environ.get("COMPUTERNAME", "localhost")
         if not is_admin():
             print(C["Medium"] + "[!] Not running as Administrator - Security log will likely be unreadable." + C["end"])
@@ -78,9 +73,17 @@ def main():
             events += evs
 
     if not events:
-        print(C["Critical"] + "[x] No events loaded. Try: python hunter.py --demo" + C["end"])
+        print(C["Critical"] + "[x] No events loaded. Use: python hunter.py --live or python hunter.py --evtx PATH" + C["end"])
         return 1
 
+    unique, seen = [], set()
+    for ev in events:
+        key = (ev.get("host"), ev.get("channel"), ev.get("record_id"), ev.get("provider"),
+               ev.get("eid"), ev.get("time"), json.dumps(ev.get("data", {}), sort_keys=True, ensure_ascii=False))
+        if key not in seen:
+            seen.add(key)
+            unique.append(ev)
+    events = unique
     findings = analyze(events)
     out_dir = args.out if os.path.isabs(args.out) else os.path.join(os.path.dirname(os.path.abspath(__file__)), args.out)
     os.makedirs(out_dir, exist_ok=True)

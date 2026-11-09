@@ -1,25 +1,30 @@
 #!/usr/bin/env python3
 """SysmonHunter Web - upload logs, paste events or scan this PC live from the browser."""
 import json
+import hashlib
+import secrets
+import hmac
 import os
 import re
+import ipaddress
+from urllib.parse import urlsplit
 import tempfile
 import threading
 import webbrowser
-import xml.etree.ElementTree as ET
-from collections import defaultdict
+from defusedxml import ElementTree as ET
 from datetime import datetime
 
-from flask import Flask, Response, request
+from flask import Flask, Response, request, session
 
-from sysmonhunter.demo import generate
 from sysmonhunter.engine import analyze
 from sysmonhunter.parser import LIVE_CHANNELS, event_from_element, is_admin, read_evtx, read_live
-from sysmonhunter.report import TEMPLATE, build_graph
-from sysmonhunter.rules import SEV_ORDER, SEV_SCORE, TACTICS, catalog
+from sysmonhunter.report import TEMPLATE, build_graph, host_risk_rows, telemetry_coverage
+from sysmonhunter.rules import SEV_ORDER, TACTICS, catalog
 
 app = Flask(__name__)
-app.config["MAX_CONTENT_LENGTH"] = 1024 * 1024 * 1024  # 1 GB upload limit
+app.secret_key = secrets.token_bytes(32)
+app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Strict", SESSION_COOKIE_SECURE=False)
+app.config["MAX_CONTENT_LENGTH"] = 256 * 1024 * 1024  # 256 MB local upload limit
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 CSS = """
@@ -38,26 +43,23 @@ label.c{display:block;font-size:13px;margin:3px 0}a{color:#38bdf8}
 
 INDEX = """<!DOCTYPE html><html><head><meta charset="utf-8"><title>SysmonHunter</title><style>%(css)s</style></head><body><div class="wrap">
 <h1>Sysmon<span>Hunter</span></h1>
-<p class="muted">Windows Event + Sysmon threat hunting. Give it logs, get ATT&amp;CK-mapped detections, a kill-chain verdict and a 3D attack graph.</p>
+<p class="muted">Windows Event + Sysmon threat hunting. Analyse genuine event records and review evidence-linked detections.</p>
 <div><span class="badge %(admin_cls)s">%(admin_txt)s</span><span class="badge %(evtx_cls)s">%(evtx_txt)s</span><span class="badge ok">%(rules)d detection rules</span></div>
 <div class="grid">
 <form class="card" method="post" action="/analyze" enctype="multipart/form-data">
 <h2>1. Upload log files</h2><div class="muted">.evtx (Sysmon / Security / System / PowerShell) or .xml exported with wevtutil. Multiple files allowed.</div>
-<input type="hidden" name="mode" value="upload">
+<input type="hidden" name="mode" value="upload"><input type="hidden" name="csrf_token" value="%(csrf)s">
 <label class="drop" id="dz"><span id="dzt">Click to choose files</span><input type="file" name="files" id="fi" multiple accept=".evtx,.xml,.txt"></label>
 <button type="submit">Analyze files</button></form>
 <form class="card" method="post" action="/analyze">
 <h2>2. Paste event XML</h2><div class="muted">Paste one or many &lt;Event&gt; XML blocks (Event Viewer &gt; Details &gt; XML View).</div>
-<input type="hidden" name="mode" value="paste"><textarea name="xml" placeholder="&lt;Event xmlns=...&gt; ... &lt;/Event&gt;"></textarea>
+<input type="hidden" name="mode" value="paste"><input type="hidden" name="csrf_token" value="%(csrf)s"><textarea name="xml" placeholder="&lt;Event xmlns=...&gt; ... &lt;/Event&gt;"></textarea>
 <button type="submit">Analyze pasted events</button></form>
 <form class="card" method="post" action="/analyze">
-<h2>3. Scan this PC (live)</h2><div class="muted">Reads the newest events from this machine. Run the app from an Administrator terminal for the Security log.</div>
-<input type="hidden" name="mode" value="live">
+<h2>3. Scan this PC (live)</h2><div class="muted">Reads the newest events from this machine using your current Windows permissions. The web server never elevates itself. Protected channels may return Access Denied; upload EVTX exports if needed.</div>
+<input type="hidden" name="mode" value="live"><input type="hidden" name="csrf_token" value="%(csrf)s">
 <div style="margin:10px 0">%(channels)s</div>Max events per log: <input type="number" name="max" value="3000" min="100" max="50000">
 <br><button type="submit">Scan live logs</button></form>
-<form class="card" method="post" action="/analyze">
-<h2>4. Demo</h2><div class="muted">Simulated intrusion (phishing, persistence, credential theft, lateral movement, ransomware prep). Good for a quick tour.</div>
-<input type="hidden" name="mode" value="demo"><button type="submit">Run demo</button></form>
 </div>
 <p class="muted" style="margin-top:24px">Runs 100%% locally on 127.0.0.1. Nothing is uploaded to the internet.</p></div>
 <script>document.getElementById('fi').onchange=function(e){var n=e.target.files.length;document.getElementById('dzt').textContent=n?n+' file(s) selected: '+Array.from(e.target.files).map(function(f){return f.name}).join(', '):'Click to choose files';};</script>
@@ -77,7 +79,10 @@ def events_from_xml(text):
     text = re.sub(r"<\?xml[^>]*\?>", "", text or "").strip()
     if not text:
         return []
-    root = ET.fromstring("<Wrapper>" + text + "</Wrapper>")
+    try:
+        root = ET.fromstring("<Wrapper>" + text + "</Wrapper>")
+    except ET.ParseError as exc:
+        raise ValueError("The supplied XML is not well-formed: %s" % exc) from exc
     out = []
     for el in root.iter():
         if el.tag.split("}")[-1] == "Event":
@@ -87,17 +92,32 @@ def events_from_xml(text):
     return out
 
 
-def render(source, count, findings, events):
-    hosts = defaultdict(list)
-    for f in findings:
-        hosts[f["host"]].append(SEV_SCORE[f["severity"]])
-    rows = sorted(({"host": h, "count": len(v), "score": min(100, sum(v) // 2)} for h, v in hosts.items()),
-                  key=lambda x: -x["score"])
+def render(source, count, findings, events, notes=None):
+    rows = host_risk_rows(findings)
     data = {"meta": {"source": source, "events": count, "generated": datetime.now().strftime("%Y-%m-%d %H:%M:%S")},
             "findings": findings, "hosts": rows, "tactics": TACTICS, "sev": SEV_ORDER,
-            "graph": build_graph(events, findings), "rules": len(catalog())}
-    html = TEMPLATE.replace("__DATA__", json.dumps(data).replace("</", "<\\/"))
+            "graph": build_graph(events, findings), "coverage": telemetry_coverage(events), "rules": len(catalog()), "notices": notes or []}
+    # Escape HTML-significant characters before embedding JSON in a script.
+    payload = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+    payload = (payload.replace("&", "\\u0026").replace("<", "\\u003c")
+                      .replace(">", "\\u003e").replace("\u2028", "\\u2028")
+                      .replace("\u2029", "\\u2029"))
+    html = TEMPLATE.replace("__DATA__", payload)
     return html.replace("<h1>", '<p><a href="/">&larr; New analysis</a></p><h1>', 1)
+
+
+
+@app.after_request
+def harden_response(response):
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+@app.errorhandler(413)
+def too_large(_error):
+    return page("Upload exceeds the 256 MB limit. Split the EVTX export into smaller files and retry.", 413)
 
 
 @app.route("/")
@@ -108,25 +128,104 @@ def index():
     except ImportError:
         evtx_ok = False
     admin = is_admin()
+    csrf = session.setdefault("_csrf", secrets.token_urlsafe(32))
     channels = "".join('<label class="c"><input type="checkbox" name="channel" value="%s" checked> %s</label>' % (c, c)
                        for c in LIVE_CHANNELS)
     return Response(INDEX % {
         "css": CSS, "channels": channels, "rules": len(catalog()),
-        "admin_cls": "ok" if admin else "warn", "admin_txt": "Administrator" if admin else "Not admin (Security log limited)",
+        "admin_cls": "ok" if admin else "warn", "admin_txt": "Administrator" if admin else "Standard user (protected live channels may be limited)",
+        "csrf": csrf,
         "evtx_cls": "ok" if evtx_ok else "warn", "evtx_txt": ".evtx support ready" if evtx_ok else "python-evtx missing: pip install python-evtx",
     }, mimetype="text/html")
 
 
+def _is_loopback_name(hostname):
+    """Accept only literal loopback addresses or localhost names."""
+    if not hostname:
+        return False
+    name = hostname.rstrip(".").lower()
+    if name == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(name).is_loopback
+    except ValueError:
+        return False
+
+
+
+
+@app.before_request
+def enforce_loopback_host():
+    # The server is bound to 127.0.0.1. Reject unexpected Host headers as defense
+    # in depth; do not trust forwarded headers from arbitrary local processes.
+    try:
+        hostname = urlsplit(request.host_url).hostname
+    except ValueError:
+        hostname = None
+    if not _is_loopback_name(hostname):
+        return page("This application is available only through a loopback address.", 403)
+
+
+
+def _same_local_origin(origin_value):
+    """Require a same-origin HTTP request to this loopback-only application."""
+    try:
+        origin = urlsplit(origin_value)
+        target = urlsplit(request.host_url)
+        # Origin headers are serialized origins, not arbitrary URLs.
+        if origin.scheme != "http" or origin.username or origin.password:
+            return False
+        if origin.path not in ("", "/") or origin.query or origin.fragment:
+            return False
+        if not _is_loopback_name(origin.hostname) or not _is_loopback_name(target.hostname):
+            return False
+        origin_port = origin.port if origin.port is not None else 80
+        target_port = target.port if target.port is not None else 80
+        return origin.scheme == target.scheme and origin.hostname.lower() == target.hostname.lower() and origin_port == target_port
+    except (TypeError, ValueError):
+        return False
+
+
 @app.route("/analyze", methods=["POST"])
 def run():
+    if not _is_loopback_name(urlsplit(request.host_url).hostname):
+        return page("This application accepts requests only through a loopback address.", 403)
+    try:
+        if request.remote_addr and not ipaddress.ip_address(request.remote_addr).is_loopback:
+            return page("This application accepts requests only from this computer.", 403)
+    except ValueError:
+        return page("The client address could not be validated.", 403)
+    supplied = request.form.get("csrf_token", "")
+    expected = session.get("_csrf", "")
+    if not expected or not hmac.compare_digest(supplied, expected):
+        return page("This request could not be verified. Refresh the page and try again.", 403)
+    # Fetch Metadata is an additional browser signal. Reject explicitly
+    # cross-site submissions, but do not treat Origin: null as proof of an
+    # attack when the session-bound CSRF token has already been validated.
+    # Browsers can serialize opaque/local-file/sandboxed origins as "null".
+    fetch_site = request.headers.get("Sec-Fetch-Site", "").strip().lower()
+    if fetch_site == "cross-site":
+        app.logger.warning("Rejected cross-site POST to /analyze from %r", request.remote_addr)
+        return page("Cross-site requests are not accepted. Open SysmonHunter directly at http://127.0.0.1:5000 and retry.", 403)
+
+    origin = request.headers.get("Origin")
+    if origin and origin.lower() != "null" and not _same_local_origin(origin):
+        app.logger.warning("Rejected request origin %r for local host %r", origin, request.host)
+        return page("The browser origin does not match this local application. Open http://127.0.0.1:5000, refresh the page, and retry.", 403)
+    if origin and origin.lower() == "null":
+        app.logger.info("Accepted opaque Origin only after valid session CSRF token; Fetch-Site=%r", fetch_site or "not supplied")
     mode = request.form.get("mode", "")
     events, notes, source = [], [], ""
     try:
-        if mode == "demo":
-            events, source = generate(), "Demo dataset (simulated intrusion)"
-        elif mode == "live":
-            channels = request.form.getlist("channel") or LIVE_CHANNELS
-            limit = max(100, min(50000, int(request.form.get("max") or 3000)))
+        if mode == "live":
+            requested = request.form.getlist("channel")
+            channels = [ch for ch in requested if ch in LIVE_CHANNELS] if requested else list(LIVE_CHANNELS)
+            if not channels:
+                return page("Select at least one supported Windows event channel.", 400)
+            try:
+                limit = max(100, min(50000, int(request.form.get("max") or 3000)))
+            except ValueError:
+                return page("Maximum events must be a whole number between 100 and 50000.", 400)
             source = "Live logs: " + os.environ.get("COMPUTERNAME", "localhost")
             for ch in channels:
                 evs, err = read_live(ch, limit)
@@ -135,47 +234,107 @@ def run():
                 events += evs
         elif mode == "upload":
             names = []
-            for f in request.files.getlist("files"):
+            uploaded = [f for f in request.files.getlist("files") if f and f.filename]
+            if not uploaded:
+                return page("Choose at least one .evtx or exported .xml file before analyzing.", 400)
+            for f in uploaded:
                 if not f or not f.filename:
                     continue
-                names.append(f.filename)
+                names.append(os.path.basename(f.filename.replace("\\\\", "/")))
                 ext = os.path.splitext(f.filename)[1].lower()
                 if ext == ".evtx":
                     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".evtx")
                     tmp.close()
                     try:
                         f.save(tmp.name)
-                        events += read_evtx(tmp.name)
+                        digest = hashlib.sha256()
+                        with open(tmp.name, "rb") as evidence_file:
+                            for chunk in iter(lambda: evidence_file.read(1024 * 1024), b""):
+                                digest.update(chunk)
+                        notes.append("Evidence SHA-256 (%s): %s" % (os.path.basename(f.filename.replace("\\\\", "/")), digest.hexdigest()))
+                        try:
+                            parsed = read_evtx(tmp.name)
+                            events.extend(parsed)
+                            if not parsed:
+                                notes.append("No readable event records found in: " + os.path.basename(f.filename.replace("\\\\", "/")))
+                        except Exception as exc:
+                            notes.append("Could not parse %s: %s" % (os.path.basename(f.filename.replace("\\\\", "/")), str(exc).splitlines()[0]))
                     finally:
-                        os.unlink(tmp.name)
+                        try:
+                            os.unlink(tmp.name)
+                        except OSError:
+                            pass
                 elif ext in (".xml", ".txt"):
-                    events += events_from_xml(f.read().decode("utf-8", "replace"))
+                    raw = f.read()
+                    notes.append("Evidence SHA-256 (%s): %s" % (os.path.basename(f.filename.replace("\\\\", "/")), hashlib.sha256(raw).hexdigest()))
+                    try:
+                        decoded = raw.decode("utf-8-sig")
+                    except UnicodeDecodeError:
+                        decoded = raw.decode("utf-16", "replace")
+                    try:
+                        parsed = events_from_xml(decoded)
+                        events.extend(parsed)
+                        if not parsed:
+                            notes.append("No event records found in: " + os.path.basename(f.filename.replace("\\\\", "/")))
+                    except ValueError as exc:
+                        notes.append("Could not parse %s: %s" % (os.path.basename(f.filename.replace("\\\\", "/")), str(exc)))
                 else:
-                    notes.append("Skipped unsupported file: " + f.filename)
+                    notes.append("Skipped unsupported file: " + os.path.basename(f.filename.replace("\\\\", "/")))
             source = "Uploaded: " + ", ".join(names)
         elif mode == "paste":
             events, source = events_from_xml(request.form.get("xml", "")), "Pasted event XML"
+            pasted = request.form.get("xml", "")
+            notes.append("XML provenance note: pasted XML is operator-supplied; SysmonHunter cannot independently prove its origin. Prefer original EVTX or live collection for evidence handling.")
+            notes.append("Pasted XML SHA-256: %s" % hashlib.sha256(pasted.encode("utf-8")).hexdigest())
         else:
             return page("Unknown mode.", 400)
     except SystemExit as exc:
         return page(str(exc), 500)
-    except Exception as exc:
-        return page("Could not process the input: %s" % exc, 500)
+    except ValueError as exc:
+        return page(str(exc), 400)
+    except Exception:
+        app.logger.exception("Analysis request failed")
+        return page("The analysis could not be completed. Check the terminal for the detailed error. "
+                    "For EVTX uploads, confirm python-evtx is installed and the file is valid.", 500)
+
+    # Multiple uploaded exports can overlap. Deduplicate by stable event identity
+    # while preserving original order and all distinct records.
+    unique_events, seen_events = [], set()
+    for ev in events:
+        key = (ev.get("host"), ev.get("channel"), ev.get("record_id"), ev.get("provider"),
+               ev.get("eid"), ev.get("time"), json.dumps(ev.get("data", {}), sort_keys=True, ensure_ascii=False))
+        if key in seen_events:
+            continue
+        seen_events.add(key)
+        unique_events.append(ev)
+    events = unique_events
 
     if not events:
-        return page("No events could be parsed. " + " ".join(notes) + " Check the file type or run as Administrator for live scans.", 400)
+        return page("No events could be parsed. " + " ".join(notes) + " Check the file type and Windows channel permissions.", 400)
 
-    findings = analyze(events)
-    html = render(source, len(events), findings, events)
-    out_dir = os.path.join(HERE, "reports")
-    os.makedirs(out_dir, exist_ok=True)
-    with open(os.path.join(out_dir, "web_report_%s.html" % datetime.now().strftime("%Y%m%d_%H%M%S")), "w", encoding="utf-8") as fh:
-        fh.write(html)
+    try:
+        diagnostics = []
+        findings = analyze(events, diagnostics=diagnostics)
+        if diagnostics:
+            for diagnostic in diagnostics:
+                app.logger.error("Detection rule %s failed: %s", diagnostic.get("rule_id"), diagnostic.get("error"))
+            notes.append("Detection rule errors: %d rule evaluation(s) failed. Review the application terminal; affected rules were not silently treated as clean." % len(diagnostics))
+        html = render(source, len(events), findings, events, notes)
+        out_dir = os.path.join(HERE, "reports")
+        os.makedirs(out_dir, exist_ok=True)
+        report_name = "web_report_%s.html" % datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        with open(os.path.join(out_dir, report_name), "w", encoding="utf-8") as fh:
+            fh.write(html)
+    except Exception:
+        app.logger.exception("Detection, correlation, or report rendering failed")
+        return page("The events were parsed, but detection/report generation failed. Check the application terminal for the detailed traceback.", 500)
     return Response(html, mimetype="text/html")
+
 
 
 if __name__ == "__main__":
     port = 5000
     print("SysmonHunter Web running at http://127.0.0.1:%d  (Ctrl+C to stop)" % port)
+    print("Security note: the Flask web server runs with the current user privileges; it never requests UAC elevation.")
     threading.Timer(1.2, lambda: webbrowser.open("http://127.0.0.1:%d" % port)).start()
-    app.run(host="127.0.0.1", port=port, debug=False)
+    app.run(host="127.0.0.1", port=port, debug=False, threaded=True, use_reloader=False)

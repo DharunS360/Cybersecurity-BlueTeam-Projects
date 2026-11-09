@@ -7,7 +7,7 @@ SEV_SCORE = {"Low": 25, "Medium": 50, "High": 75, "Critical": 100}
 SEV_ORDER = ["Critical", "High", "Medium", "Low"]
 TACTICS = ["Initial Access", "Execution", "Persistence", "Privilege Escalation",
            "Defense Evasion", "Credential Access", "Discovery", "Lateral Movement",
-           "Command and Control", "Impact"]
+           "Command and Control", "Impact", "Collection", "Exfiltration", "Correlation"]
 
 STATELESS = []
 
