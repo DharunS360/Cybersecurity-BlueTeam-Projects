@@ -29,6 +29,34 @@ A local Windows threat-hunting utility that turns **operator-supplied event reco
 13. [Troubleshooting](#troubleshooting)
 14. [Roadmap](#roadmap)
 
+## Screenshots
+
+Captured on the author's own Windows workstation with real Sysmon telemetry. The live scan used an elevated terminal to read the Security channel; the recommended path remains exporting an EVTX with an authorised account. Findings are investigative leads, not confirmed incidents.
+
+**Web interface:** upload EVTX/XML, paste event XML, or scan live channels.
+
+![Home](docs/screenshots/01-home.png)
+
+**Live scan summary:** 12,556 events from five channels, with per-channel and per-Event-ID telemetry coverage.
+
+![Live scan summary](docs/screenshots/02-live-scan-summary.png)
+
+**Host risk and MITRE ATT&CK coverage:** all 7 findings in this run came from Windows Defender events (detections and exclusion changes).
+
+![ATT&CK matrix](docs/screenshots/03-attack-matrix.png)
+
+**Observed process and network graph** derived from Sysmon records.
+
+![Process graph](docs/screenshots/04-process-graph.png)
+
+**Findings timeline** with severity filters and search.
+
+![Findings timeline](docs/screenshots/05-findings-timeline.png)
+
+**Evidence handling:** uploaded EVTX files are SHA-256 hashed. This run analysed 757 Sysmon events with no rule matches, and the report states that this does not prove the host is clean.
+
+![EVTX evidence hashes](docs/screenshots/06-evtx-evidence-hashes.png)
+
 ## Features
 
 - **Three real-data inputs:** original `.evtx` files, Event Viewer XML (upload or paste) and live collection through the built-in `wevtutil`.
