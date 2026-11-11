@@ -1,0 +1,31 @@
+name: Project 07 CI
+
+on:
+  push:
+    paths:
+      - "07-Windows-Sysmon-Threat-Hunter/**"
+      - ".github/workflows/project-07-ci.yml"
+  pull_request:
+    paths:
+      - "07-Windows-Sysmon-Threat-Hunter/**"
+
+jobs:
+  test:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+    defaults:
+      run:
+        working-directory: 07-Windows-Sysmon-Threat-Hunter
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: 07-Windows-Sysmon-Threat-Hunter/requirements.txt
+      - run: python -m pip install --upgrade pip
+      - run: pip install -r requirements.txt
+      - run: python -m compileall -q .
+      - run: python -m unittest discover -s tests -v

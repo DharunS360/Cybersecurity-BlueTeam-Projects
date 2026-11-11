@@ -1,177 +1,176 @@
-# 07-Windows-Sysmon-Threat-Hunter — SysmonHunter
+# SysmonHunter: Windows Event + Sysmon Threat Hunter
 
-**Release:** 1.4.2 (hardened local build)
+![Version](https://img.shields.io/badge/Release-1.4.3-blue)
+![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)
+![Platform](https://img.shields.io/badge/Platform-Windows%2010%2F11-0078D6?logo=windows&logoColor=white)
+![MITRE](https://img.shields.io/badge/MITRE-ATT%26CK%20Mapped-red)
+![UI](https://img.shields.io/badge/UI-Local%20Flask%20(127.0.0.1)-lightgrey)
+![License](https://img.shields.io/badge/License-MIT-green)
+[![CI](https://github.com/DharunS360/Cybersecurity-BlueTeam-Projects/actions/workflows/project-07-ci.yml/badge.svg)](https://github.com/DharunS360/Cybersecurity-BlueTeam-Projects/actions/workflows/project-07-ci.yml)
 
-A local Windows event threat-hunting utility. It analyses **operator-supplied Windows event records** from real `.evtx` exports, Event Viewer XML, or supported live Windows Event Log channels. It does not ship simulated attack logs, generated alerts, demo datasets, or a demo mode.
+A local Windows threat-hunting utility that turns **operator-supplied event records** (Sysmon, Security, System, PowerShell and Defender logs) into **MITRE ATT&CK-mapped investigative leads**, a correlated multi-stage verdict and exportable reports.
 
-> **Important:** detections are rule-based investigative leads, not proof of compromise. A clean result means only that no enabled rule matched the records collected. It does not prove that a system is safe. Validate findings against the full event context and your environment.
+> **Important:** detections are rule-based leads, not proof of compromise. A clean result means only that no enabled rule matched the records collected. Validate every finding against full event context.
 
-## What it supports
+## Contents
 
-- `.evtx` ingestion using `python-evtx`
-- Event Viewer XML export and pasted XML
-- Live collection using `wevtutil` under the current Windows user's permissions
-- Sysmon, Security, System, PowerShell Operational, and Windows Defender Operational channels
-- 104 registered rule definitions, including stateless and correlation detections
-- Evidence SHA-256 hashes for uploaded EVTX/XML evidence
-- MITRE ATT&CK technique references, event coverage summaries, and local HTML reports
-- Local-only web UI bound to `127.0.0.1`
-- session-bound CSRF token validation, Fetch Metadata cross-site rejection, loopback host checks, request size limits, and hardened XML parsing
+1. [Features](#features)
+2. [How it works](#how-it-works)
+3. [Detection coverage](#detection-coverage)
+4. [Telemetry requirements](#telemetry-requirements)
+5. [Dependencies](#dependencies)
+6. [Quick start](#quick-start)
+7. [Analysing real data](#analysing-real-data)
+8. [Sysmon setup](#sysmon-setup)
+9. [CLI reference](#cli-reference)
+10. [Security design](#security-design)
+11. [Testing and validation](#testing-and-validation)
+12. [Limitations](#limitations)
+13. [Troubleshooting](#troubleshooting)
+14. [Roadmap](#roadmap)
 
-Rule count is the number of registered rule definitions, not a claim of 104 independently validated attack detections. Some rules are heuristic and can produce false positives or miss activity when the required telemetry is absent.
+## Features
 
-## Requirements
+- **Three real-data inputs:** original `.evtx` files, Event Viewer XML (upload or paste) and live collection through the built-in `wevtutil`.
+- **104 registered rule definitions** across 12 ATT&CK tactic columns, plus stateful analytics (brute force / password spraying, discovery bursts) and a multi-stage kill-chain correlation summary.
+- **Evidence integrity:** SHA-256 hashes of every uploaded EVTX/XML file.
+- **Reporting:** local HTML report (host risk, ATT&CK matrix, process tree, searchable timeline, 3D attack graph), plus JSON and CSV exports.
+- **Hardened local web UI:** bound to `127.0.0.1`, per-session CSRF tokens, Fetch Metadata and loopback Host checks, request size limits, `defusedxml` parsing.
+- **Honest output:** collection errors and missing channels are reported, never silently treated as "scanned".
+- Does **not** block, quarantine or remediate anything. It is read-only analysis.
 
-- Windows 10 or Windows 11
-- Python 3.11+ (Python 3.12 is a conservative choice; newer versions may work if dependencies support them)
-- Sysmon installed and configured if Sysmon telemetry is required
-- Administrator rights are **not** required to start the GUI or analyse uploaded EVTX files
-- Reading protected live channels such as Security may require an appropriately authorized account or an exported EVTX file
+## How it works
 
-## Install
+```
+ .evtx / XML / wevtutil (live)
+            |
+            v
+   Parser + normaliser  ---->  common event schema (time, host, EID, channel, fields)
+            |
+            v
+   Rule engine  ----->  stateless rules (process, registry, logon, DNS, driver, pipe ...)
+            |            stateful analytics (brute force, discovery burst)
+            v
+   Correlation  ----->  multi-stage attack chain per host (3+ tactics / 30 min)
+            |
+            v
+   Reports: HTML | JSON | CSV   (+ SHA-256 evidence hashes)
+```
 
-Open PowerShell in this project folder:
+## Detection coverage
+
+| Tactic | Example detections |
+|---|---|
+| Initial Access | Network/RDP logon from public IP, web server spawning shells, risky attachment drops, autorun.inf |
+| Execution | Encoded/hidden PowerShell, Office or PDF reader spawning shells, WMIC, script host from user paths |
+| Persistence | Scheduled tasks, Run keys, suspicious services, WMI subscriptions, IFEO / Sticky Keys backdoors |
+| Privilege Escalation | UAC bypass, vulnerable or unsigned drivers, print spooler abuse, named-pipe impersonation |
+| Defense Evasion | Log clearing, AMSI bypass, Defender tampering, timestomping, masquerading, obfuscation |
+| Credential Access | LSASS access, DCSync, Kerberoasting / AS-REP roasting, NTDS / SAM theft, WDigest |
+| Discovery | AD enumeration, network and system discovery, discovery-burst analytics |
+| Lateral Movement | PsExec / WMI / WinRM / DCOM, admin shares, pass-the-hash heuristics |
+| Collection | Archive staging, input capture, mailbox file collection |
+| Command and Control | Tool download, RMM / tunnelling tools, DNS tunnelling heuristics, C2 named pipes |
+| Exfiltration | Cloud exfiltration tooling, file-sharing DNS, removable media |
+| Impact | Recovery inhibition, ransom notes, backup/DB service stops, miners |
+
+List every rule with its technique and severity: `python hunter.py --rules`.
+
+> The rule count is the number of registered definitions, not a claim of 104 independently validated attack detections. Several rules are heuristic.
+
+## Telemetry requirements
+
+Rules only fire when the matching telemetry exists.
+
+| Data source | Needed for | How to enable |
+|---|---|---|
+| Sysmon (events 1, 2, 3, 6, 7, 8, 10, 11, 13, 17/18, 19-21, 22, 25) | Process, network, registry, driver, pipe, DNS rules | Install Sysmon + `sysmonconfig.xml` |
+| Security 4688 + command line | Process rules without Sysmon | Audit "Process Creation" + include command line |
+| Security 4624/4625/4648/4662/4698/4703/4768/4769/5145 | Logon, Kerberos, AD, task and share rules | Advanced audit policy (mostly on domain controllers) |
+| System 7045, 104 | Service install, log cleared | Enabled by default |
+| PowerShell 4104 | Script block detections | Enable Script Block Logging |
+| Defender Operational | Defender tamper / detection rules | Present by default on Windows 10/11 |
+
+## Dependencies
+
+| Package | Purpose |
+|---|---|
+| Flask (>=3.1,<4) | Local web interface |
+| python-evtx (>=0.7.4) | Reading `.evtx` files |
+| defusedxml (>=0.7.1,<1) | Hardened XML parsing of untrusted event XML |
+| `wevtutil` (Windows built-in) | Live event log collection |
+
+Requires **Windows 10/11** and **Python 3.11+**. Administrator rights are not needed to start the app or analyse EVTX exports.
+
+## Quick start
 
 ```powershell
 py -3 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 pip install -r requirements.txt
-```
-
-If PowerShell blocks activation, use the venv interpreter directly:
-
-```powershell
-.\.venv\Scripts\python.exe -m pip install --upgrade pip
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
-```
-
-## Start the application
-
-Run as your normal Windows user. Do **not** run the Flask web server as Administrator merely to bypass Windows Event Log permissions.
-
-```powershell
 python app.py
 ```
 
-Open this exact address in your browser:
+Or double-click `run_gui.bat`, which does the same. Open **http://127.0.0.1:5000** (use this exact address; the app enforces same-origin and loopback checks). Run as your normal user. Do not run the web server as Administrator.
 
-**http://127.0.0.1:5000**
+## Analysing real data
 
-Do not alternate between `localhost` and `127.0.0.1`, or between different ports. The application intentionally enforces same-origin and loopback checks. If a POST returns `403`, refresh the home page at the exact address above and retry. Do not disable CSRF or origin validation.
+**Option A: original EVTX (recommended for evidence).** In Event Viewer (`eventvwr.msc`) open the channel, choose *Save All Events As...*, then upload the `.evtx`. Keep the original file untouched. Multiple files are supported.
 
-Stop the server with `Ctrl+C`.
+**Option B: live scan.** Select channels and an event limit in the *Scan this PC (live)* panel. Access is limited to the current account's permissions. Denied channels (for example Security) are reported as collection notes. Export those to EVTX with an authorised account instead.
 
-## Analyse genuine event data
+**Option C: Event Viewer XML.** Open an event, *Details*, *XML View*, then paste the complete `<Event>...</Event>`.
 
-### Option A — upload original EVTX exports (recommended for evidence)
+For validation against known attack behaviour, use publicly available labelled EVTX datasets (for example the `EVTX-ATTACK-SAMPLES` project on GitHub) in an isolated lab.
 
-1. Open Event Viewer (`eventvwr.msc`).
-2. Navigate to the required channel, for example:
-   - Applications and Services Logs → Microsoft → Windows → Sysmon → Operational
-   - Windows Logs → Security
-   - Windows Logs → System
-   - Applications and Services Logs → Microsoft → Windows → PowerShell → Operational
-3. Choose **Save All Events As…** and save the original `.evtx`.
-4. In SysmonHunter, upload the `.evtx` file and select **Analyze files**.
+## Sysmon setup
 
-You can upload more than one file. Preserve original files separately and do not edit them. The application computes SHA-256 hashes for uploaded evidence files. A hash identifies the exact file analysed; it does not establish that the source is trustworthy or untampered before collection.
+Sysmon is optional for Security/System/PowerShell logs but required for Sysmon-specific detections.
 
-### Option B — live scan
-
-Select the channels and event limit in the **Scan this PC (live)** panel. The application uses `wevtutil` under the current account. Windows may deny access to protected channels. Such errors are displayed as collection notes; the application must not claim that a denied channel was scanned.
-
-### Option C — Event Viewer XML
-
-In Event Viewer, open an event → **Details** → **XML View**, then paste the complete `<Event>...</Event>` XML. Pasted XML is operator-supplied and its origin cannot be independently verified. For evidence handling, prefer original EVTX files.
-
-## Sysmon installation and configuration
-
-Sysmon is optional for analysing existing Security/System/PowerShell logs, but Sysmon telemetry is required for Sysmon-specific detections.
-
-1. Obtain Sysmon from Microsoft's official Sysinternals distribution.
-2. Review `sysmonconfig.xml` and confirm its schema version matches the installed Sysmon binary.
-3. Inspect the current configuration before changing it.
-4. Apply configuration only from an elevated PowerShell window when you intentionally choose to do so:
+1. Download Sysmon from the official Microsoft Sysinternals page.
+2. Review `sysmonconfig.xml` and confirm its schema version matches your Sysmon binary.
+3. Inspect the current configuration, then apply from an **elevated** PowerShell:
 
 ```powershell
 .\Sysmon64.exe -s
-.\Sysmon64.exe -c .\sysmonconfig.xml
+.\Sysmon64.exe -accepteula -i .\sysmonconfig.xml   # first install
+.\Sysmon64.exe -c .\sysmonconfig.xml               # update existing install
 ```
 
-Use the actual path and executable name on your machine. Applying a configuration changes system telemetry collection and requires administrative authorization. Do not run unknown configurations without reviewing them first.
+Applying a configuration changes system telemetry. Review it first.
 
-Microsoft documentation:
 - Sysmon overview: https://learn.microsoft.com/en-us/sysinternals/downloads/sysmon
-- Sysmon configuration: https://learn.microsoft.com/en-us/windows/security/operating-system-security/sysmon/sysmon-configuration-files
 
-## CLI usage
-
-List the registered rules:
+## CLI reference
 
 ```powershell
-python hunter.py --rules
+python hunter.py --rules                                  # list rules
+python hunter.py --evtx "C:\Logs\Security.evtx" "C:\Logs\Sysmon.evtx"
+python hunter.py --live --max 3000                        # supported live channels
 ```
 
-Analyse real EVTX files:
+HTML, JSON and CSV outputs are written to `reports/`.
+
+## Security design
+
+- Binds only to `127.0.0.1`; not intended for LAN or internet exposure.
+- Session-bound CSRF tokens, Fetch Metadata cross-site rejection, loopback Host validation, exact-origin checks and request size limits.
+- `defusedxml` for uploaded/pasted XML and EVTX record XML.
+- Temporary EVTX copies are deleted after processing; no data leaves the machine.
+- Reports may contain usernames, hostnames, IPs and command lines. Protect and redact before sharing.
+
+## Testing and validation
 
 ```powershell
-python hunter.py --evtx "C:\Logs\Microsoft-Windows-Sysmon%4Operational.evtx" "C:\Logs\Security.evtx"
+python -m unittest discover -s tests -v
 ```
 
-Scan supported live channels:
+Regression tests cover unique rule IDs, severity values, tactic metadata, empty input, a process-rule match and a benign non-match. CI runs them on Windows for Python 3.11 and 3.12.
 
-```powershell
-python hunter.py --live --max 3000
-```
+Unit tests do **not** certify detection accuracy. Measure precision and recall on authorised, analyst-labelled datasets before relying on the output operationally.
 
-The CLI writes HTML, JSON, and CSV findings into `reports/`.
+## Limitations
 
-## Output interpretation and limitations
-
-- A rule match is a lead for analyst review, not a confirmed incident.
-- Severity is a rule-assigned triage priority. It is not a calibrated probability or confidence score.
-- ATT&CK mappings describe the behavior a rule is intended to detect; verify the mapping and event context before using it in formal reporting.
-- Some rules require specific Sysmon event types or Windows audit policies. Missing telemetry creates blind spots.
-- Event IDs and field names can differ by Windows version, audit policy, Sysmon version, and provider.
-- A finding may be a legitimate administrative action, security tool, installer, or enterprise management activity.
-- No finding does not mean no compromise.
-- The application does not block processes, quarantine files, change firewall rules, or remediate hosts.
-
-## Data handling and safety
-
-- The web application binds only to `127.0.0.1`; it is not intended to be exposed to a LAN or the internet.
-- The server runs with the current user's privileges and does not request UAC elevation.
-- Session-bound CSRF token validation and Fetch Metadata cross-site rejection are enabled. An opaque `Origin: null` is accepted only after a valid session CSRF token; explicitly cross-site requests and untrusted non-null origins remain rejected. Do not remove these protections.
-- Uploaded files are parsed locally and temporary EVTX copies are removed after processing.
-- Generated reports can contain usernames, hostnames, IP addresses, command lines, and other sensitive security telemetry. Protect the `reports/` folder and redact reports before sharing.
-- No source logs are uploaded to a remote service by this application.
-
-## Troubleshooting
-
-**403 when submitting an analysis**
-- Open `http://127.0.0.1:5000` (not `localhost`).
-- Refresh the page to obtain a current session token.
-- Submit from that same tab and address.
-- Ensure no browser extension or proxy is rewriting the request origin.
-- Do not disable CSRF/origin checks.
-
-**EVTX support missing**
-```powershell
-python -m pip install -r requirements.txt
-```
-
-**Access denied on Security or another protected channel**
-- This is a Windows permission boundary, not a detection-engine failure.
-- Export the channel to EVTX using an authorized account and upload that export.
-- Do not elevate the web server solely to read a protected channel.
-
-**No Sysmon events**
-- Confirm the Sysmon service is installed and running.
-- Confirm the Sysmon Operational channel is enabled.
-- Confirm the active Sysmon configuration records the event types needed by the rules.
-
-**No findings**
-- Check the report's telemetry coverage and collection notes.
-- Confirm the relevant channel and event IDs were actually collected.
-- Review the rule definitions and validate using authorized, controlled testing in an isolated lab.
+- Findings are leads, not confirmed incidents. Severity is a triage priority, not a probability.
+-
