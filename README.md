@@ -3,8 +3,8 @@
 ![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)
 ![Platform](https://img.shields.io/badge/Platform-Windows%2010%2F11-0078D6?logo=windows&logoColor=white)
 ![Focus](https://img.shields.io/badge/Focus-Blue%20Team%20%2F%20SOC-1f6feb)
-![Projects](https://img.shields.io/badge/Projects-9%20Completed-2ea043)
-![Roadmap](https://img.shields.io/badge/Roadmap-4%20Planned-8957e5)
+![Projects](https://img.shields.io/badge/Projects-10%20Completed-2ea043)
+![Roadmap](https://img.shields.io/badge/Roadmap-3%20Planned-8957e5)
 ![MITRE](https://img.shields.io/badge/MITRE-ATT%26CK%20Mapped-red)
 ![License](https://img.shields.io/badge/License-MIT-green)
 
@@ -23,13 +23,14 @@ A portfolio of hands-on, from-scratch security tools built for **SOC operations,
 | 08 | [Network Traffic Analyzer](08-Network-Traffic-Analyzer) | Real-time network detection console: flow tracking, process attribution, TLS SNI/JA3, GeoIP/ASN, threat intel and 16 MITRE ATT&CK-mapped detections | Python, PyQt5, Scapy, psutil, PyQtGraph | Completed |
 | 09 | [Incident Response Triage Toolkit](09-Incident-Response-Triage-Toolkit) | Live Windows IR triage console: process, network, persistence and event-log collection, MITRE ATT&CK-mapped detections, timeline, IOC extraction, process tree, baseline diff and case export | Python, PyQt5, psutil, PowerShell/CIM, VirusTotal | Completed |
 | 10 | [PhishScope](10-Phishing-Email-Analyzer) | Phishing e-mail triage: live SPF/DKIM/DMARC, routing, URL and attachment analysis, IOCs and MITRE mapping | Python, PyQt5, dnspython, dkimpy, VirusTotal | Completed |
+| 12 | [SOAR Playbook Automation](12-SOAR-Playbook-Automation) | Live multi-source threat-intel enrichment engine: 9 sources, explainable scoring, hash-chained audit log, .eml/JSON/CSV ingestion | Python, requests, SQLite, VirusTotal, AbuseIPDB, OTX, abuse.ch, CISA KEV, EPSS | Phase 1 Complete |
 
 ## Blue Team Skills Demonstrated
 
 | Domain | Covered by |
 |---|---|
 | Credential security | 01 |
-| Threat intelligence and IOC enrichment | 02, 04, 05, 08, 09, 10 |
+| Threat intelligence and IOC enrichment | 02, 04, 05, 08, 09, 10, 12 |
 | Log analysis and detection of brute-force activity | 03, 07 |
 | Windows endpoint telemetry hunting (Sysmon, Security, PowerShell logs) | 07 |
 | Phishing and malicious URL analysis | 04, 10 |
@@ -50,7 +51,6 @@ Planned projects that extend the portfolio across the full SOC workflow.
 |---|---|---|---|
 | 06 | Detection Engineering Lab | Sigma-style rule engine, rule testing, ATT&CK coverage map | Planned |
 | 11 | Mini SIEM | Log ingestion, correlation rules, alerting and dashboard | Planned |
-| 12 | SOAR Playbook Automation | Automated enrichment and response workflows for common alerts | Planned |
 | 13 | Windows Hardening Auditor | CIS-style configuration audit with remediation guidance | Planned |
 
 ## Repository Structure
@@ -67,6 +67,7 @@ Cybersecurity-BlueTeam-Projects/
   08-Network-Traffic-Analyzer/
   09-Incident-Response-Triage-Toolkit/
   10-Phishing-Email-Analyzer/
+  12-SOAR-Playbook-Automation/
   LICENSE
   README.md
 ```
