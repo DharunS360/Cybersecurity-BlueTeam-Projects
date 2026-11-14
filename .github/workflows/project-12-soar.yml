@@ -1,0 +1,29 @@
+name: Project 12 - SOAR
+
+on:
+  push:
+    paths:
+      - "12-SOAR-Playbook-Automation/**"
+      - ".github/workflows/project-12-soar.yml"
+  pull_request:
+    paths:
+      - "12-SOAR-Playbook-Automation/**"
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.11", "3.12"]
+    defaults:
+      run:
+        working-directory: 12-SOAR-Playbook-Automation
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install -r requirements.txt
+      - run: python -m unittest discover -s . -p "test_*.py" -t . -v
